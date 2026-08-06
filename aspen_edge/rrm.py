@@ -1,8 +1,11 @@
 from __future__ import annotations
+import os
 import time
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Any
 
+from .audit import AuditLog
 from .fleet_bus import FleetBus
 from .micro import MicroAgent, ProposeAct
 
@@ -18,51 +21,68 @@ class EdgeRRM:
     agents: dict[str, MicroAgent] = field(default_factory=dict)
     offline_queue: list[ProposeAct] = field(default_factory=list)
     bus_up: bool = True
+    audit_path: str | None = None
+    _alog: AuditLog | None = None
+
+    def __post_init__(self) -> None:
+        path = self.audit_path or os.environ.get(
+            "ASPEN_AUDIT_PATH", f"/tmp/aspen-audit-{self.node_id}.jsonl"
+        )
+        self._alog = AuditLog(Path(path))
+
+    def _record(self, event: str, **data: Any) -> dict:
+        rec = {"ts": time.time(), "event": event, **data}
+        self.audit.append(rec)
+        if self._alog:
+            chained = self._alog.append(event, {k: v for k, v in data.items()})
+            rec["hash"] = chained.get("hash")
+        return rec
 
     def start(self) -> None:
         self.bus.publish(
             "aspen.fleet.node.register",
-            {"node_id": self.node_id, "plant": self.plant, "roles": ["edge-rrm"], "caps": self.caps, "version": "0.1.0"},
+            {
+                "node_id": self.node_id,
+                "plant": self.plant,
+                "roles": ["edge-rrm"],
+                "caps": self.caps,
+                "version": "0.2.0",
+            },
             source=f"rrm/{self.node_id}",
         )
         self.bus.subscribe("aspen.safety.estop", self._on_estop)
         self.bus.subscribe("aspen.safety.clear", self._on_clear)
+        self._record("rrm_start", node_id=self.node_id, plant=self.plant)
 
     def _on_estop(self, env: dict) -> None:
         self.estop = True
-        self.audit.append({"ts": time.time(), "event": "estop", "data": env.get("data")})
+        self._record("estop", data=env.get("data"))
 
     def _on_clear(self, env: dict) -> None:
         self.estop = False
-        self.audit.append({"ts": time.time(), "event": "clear", "data": env.get("data")})
+        self._record("clear", data=env.get("data"))
 
     def add_agent(self, agent_id: str) -> MicroAgent:
         if len(self.agents) >= self.max_agents:
             raise RuntimeError("max_agents")
         agent = MicroAgent(agent_id, propose=self.handle_propose)
         self.agents[agent_id] = agent
+        self._record("agent_add", agent_id=agent_id)
         return agent
 
     def handle_propose(self, p: ProposeAct) -> dict[str, Any]:
-        rec = {"ts": time.time(), "event": "propose_act", "skill": p.skill, "args": p.args, "agent": p.agent_id}
+        base = {"skill": p.skill, "args": p.args, "agent": p.agent_id}
         if self.estop:
-            rec["result"] = "refused_estop"
-            self.audit.append(rec)
-            return rec
+            return self._record("propose_act", result="refused_estop", **base)
         if not self.bus_up:
             self.offline_queue.append(p)
-            rec["result"] = "queued_offline"
-            self.audit.append(rec)
-            return rec
-        # mediate: publish proposal; driver would execute — lab records only
+            return self._record("propose_act", result="queued_offline", **base)
         self.bus.publish(
             f"aspen.edge.{self.node_id}.propose_act",
             {"skill": p.skill, "args": p.args, "agent_id": p.agent_id},
             source=f"rrm/{self.node_id}",
         )
-        rec["result"] = "accepted_sim"
-        self.audit.append(rec)
-        return rec
+        return self._record("propose_act", result="accepted_sim", **base)
 
     def heartbeat(self) -> dict:
         payload = {
@@ -73,4 +93,11 @@ class EdgeRRM:
             "agents": list(self.agents.keys()),
             "caps": self.caps,
         }
-        return self.bus.publish("aspen.fleet.node.heartbeat", payload, source=f"rrm/{self.node_id}")
+        return self.bus.publish(
+            "aspen.fleet.node.heartbeat", payload, source=f"rrm/{self.node_id}"
+        )
+
+    def verify_audit(self) -> tuple[bool, str]:
+        if not self._alog:
+            return True, "no-log"
+        return self._alog.verify()

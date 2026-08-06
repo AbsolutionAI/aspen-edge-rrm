@@ -15,3 +15,13 @@ python3 examples/fleet_e2e.py
 
 ## Micro-agents
 Must only `propose_act` — RRM mediates and refuses when e-stop latched.
+
+## Audit log
+Set `ASPEN_AUDIT_PATH=/var/lib/aspen/audit.jsonl` for durable hash-chained JSONL (default `/tmp/aspen-audit-<node>.jsonl`).
+
+## Optional deps
+```bash
+pip install nats-py paho-mqtt
+export ASPEN_NATS_URL=nats://127.0.0.1:4222
+export ASPEN_MQTT_HOST=127.0.0.1
+```
