@@ -14,7 +14,7 @@ agent = rrm.add_agent("micro-mqtt")
 mqtt.publish_sensor("target", "pose_home")
 sense = mqtt.sense()
 assert sense.get("target") == "pose_home"
-agent.tick(sense)
+agent.tick(sense, risk_class="safe")  # explicit safe: mock cobot demo
 assert any(a.get("result") == "accepted_sim" for a in rrm.audit)
 # driver side would listen command topic
 mqtt.publish_command("move_to", {"target": "pose_home"})
