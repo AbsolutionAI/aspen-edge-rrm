@@ -4,10 +4,12 @@ import time
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
-
 from .audit import AuditLog
 from .fleet_bus import FleetBus
 from .micro import MicroAgent, ProposeAct
+
+CLEAR_AUTH_WINDOW = 300  # 5-minute window for authorize_clear
+
 
 @dataclass
 class EdgeRRM:
@@ -23,6 +25,7 @@ class EdgeRRM:
     bus_up: bool = True
     audit_path: str | None = None
     _alog: AuditLog | None = None
+    _clear_auths: dict[str, float] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
         path = self.audit_path or os.environ.get(
@@ -51,15 +54,35 @@ class EdgeRRM:
             source=f"rrm/{self.node_id}",
         )
         self.bus.subscribe("aspen.safety.estop", self._on_estop)
+        self.bus.subscribe("aspen.safety.authorize_clear", self._on_authorize_clear)
         self.bus.subscribe("aspen.safety.clear", self._on_clear)
         self._record("rrm_start", node_id=self.node_id, plant=self.plant)
 
     def _on_estop(self, env: dict) -> None:
         self.estop = True
+        self._clear_auths.clear()
         self._record("estop", data=env.get("data"))
 
+    def _prune_clear_auths(self) -> None:
+        now = time.time()
+        self._clear_auths = {h: t for h, t in self._clear_auths.items() if now - t <= CLEAR_AUTH_WINDOW}
+
+    def _on_authorize_clear(self, env: dict) -> None:
+        data = env.get("data", {})
+        human_id = data.get("human_id")
+        if not human_id:
+            return
+        self._prune_clear_auths()
+        self._clear_auths[human_id] = time.time()
+        self._record("authorize_clear", human_id=human_id, auth_count=len(self._clear_auths))
+
     def _on_clear(self, env: dict) -> None:
+        self._prune_clear_auths()
+        if len(self._clear_auths) < 2:
+            self._record("clear_refused_insufficient_auths", auth_count=len(self._clear_auths))
+            return
         self.estop = False
+        self._clear_auths.clear()
         self._record("clear", data=env.get("data"))
 
     def add_agent(self, agent_id: str) -> MicroAgent:
