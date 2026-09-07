@@ -5,9 +5,13 @@ from .mqtt_adapter import MQTTEdgeAdapter, InMemoryMQTT, PahoMQTT
 from .status_cli import evaluate_ops_status, format_report, main as status_main
 from .audit import AuditLog
 from .nats_bus import NatsFleetBus, nats_available
+from .sentinel import SentinelConsumer, bridge_audit_to_sentinel
+from .sentinel import AUDIT_EVENT, FLEET_OVERVIEW
 __all__ = [
     "EdgeRRM", "MicroAgent", "ProposeAct", "FleetBus", "OpsManager",
     "MQTTEdgeAdapter", "InMemoryMQTT", "PahoMQTT",
     "evaluate_ops_status", "format_report", "status_main",
     "AuditLog", "NatsFleetBus", "nats_available",
+    "SentinelConsumer", "bridge_audit_to_sentinel",
+    "AUDIT_EVENT", "FLEET_OVERVIEW",
 ]
